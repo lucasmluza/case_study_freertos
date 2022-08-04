@@ -62,6 +62,7 @@
 /* FreeRTOS kernel includes. */
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 
 /* Local includes. */
 #include "console.h"
@@ -142,6 +143,137 @@ StackType_t uxTimerTaskStack[ configTIMER_TASK_STACK_DEPTH ];
 
 /*-----------------------------------------------------------*/
 
+/* Simulate the ADC values */
+const uint16_t ADC_VALUES[16] = {4859, 6069, 7995, 8575, 10141, 9765, 7100, 7175, 4647, 3394, 2322, 2243, 856, 2325, 1817, 3964};
+
+/* Creating queues handlers */
+static QueueHandle_t buffer_adc, buffer_filt;
+
+/* Queue Configs */
+#define SEND_QUEUE_TICKS    10
+
+/* Task functions */
+
+/* Simulates an ADC reading with a rate of 1 HZ and 16-bit resolution 
+ * The read values populates a FIFO buffer of 16 positions
+ */
+void vTask1(void *pvParameters)
+{
+    uint8_t cycle = 0;
+    
+    for (;;)
+    {
+        printf("Task 1 value: %d\n", ADC_VALUES[cycle]);
+
+        /* Send ADC value to queue */
+        if (xQueueSend(buffer_adc, (void *)&ADC_VALUES[cycle], SEND_QUEUE_TICKS) != pdTRUE)
+        {
+            printf("ADC buffer is full");
+        }
+
+        /* Increment value counter and reset if max*/
+        cycle++;
+        if (cycle >= 16) cycle = 0;
+
+        /* Wait 1 second, i.e., 1 HZ */
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void vTask2(void *pvParameters)
+{
+
+    const uint8_t FILT_SIZE = 5;
+
+    uint16_t sample;
+    uint8_t sample_counter = 0;
+
+    uint16_t x[5] = {0, 0, 0, 0, 0};
+    float y;
+
+    for (;;)
+    {
+        /* Check if there is an available value in the queue */
+        if (xQueueReceive(buffer_adc, (void *)&sample, 0) == pdTRUE)
+        {
+            
+            x[sample_counter] = sample;
+            sample_counter++;
+            if (sample_counter >= 5) sample_counter = 0;
+
+
+            printf("============== Task 2: %d\n", sample_counter);
+            for (int i = 0; i < FILT_SIZE; i++)
+            {
+                printf("Task 2 %d %d\n", i, x[i]);
+            }
+            
+            /* Apply filter function */
+            for (uint8_t i = 0; i < 5; i++)
+            {
+                y += 0.2 * x[i];
+            }
+            
+            /* Send filt result to queue */
+            if (xQueueSend(buffer_filt, (void *)&y, SEND_QUEUE_TICKS) != pdTRUE)
+            {
+                printf("Filter buffer is full");
+            }
+
+            /* Clear result */
+            printf("Task 2 Result: %3.2f\n", y);
+            y = 0;
+            
+        }
+
+        /* Adding time to wait before checking the queue again*/
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+void vTask3(void *pvParameters)
+{
+
+    char cmd[6] = {'a', 'a', 'a', 'a', 'a', '\0'};
+
+    float values[64];
+
+    for (;;)
+    {
+    
+        // scanf("%s", &cmd);
+        // if (cmd == "obter\n")
+        // {
+        //     printf("=============================================\n");
+        //     printf("%s\n\n\n\n\n", cmd);
+        // }
+        
+        if (xQueueReceive(buffer_filt, (void *)&values, 0) == pdTRUE)
+        {
+            for (uint8_t i = 0; i < 64; i++)
+            {
+                printf("Task 3 value %d %d\n", i, values[i]);
+            }
+        }
+
+        /* Define an interval time to check the command */
+        vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+
+}
+
+void vTask4(void *pvParameters)
+{
+    for (;;)
+    {
+        printf("Task 4\r\n");
+
+
+
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+}
+
 int main( void )
 {
     /* SIGINT is not blocked by the posix port */
@@ -166,24 +298,31 @@ int main( void )
     #endif /* if ( projCOVERAGE_TEST != 1 ) */
 
     console_init();
-    #if ( mainSELECTED_APPLICATION == BLINKY_DEMO )
-        {
-            console_print( "Starting echo blinky demo\n" );
-            main_blinky();
-        }
-    #elif ( mainSELECTED_APPLICATION == FULL_DEMO )
-        {
-            console_print( "Starting full demo\n" );
-            main_full();
-        }
-    #else
-        {
-            #error "The selected demo is not valid"
-        }
-    #endif /* if ( mainSELECTED_APPLICATION ) */
+    
+    /* Main case study application */
+
+    /* Create queues for handling ADC and filter */
+    buffer_adc = xQueueCreate( 16, sizeof( uint16_t ) );
+    buffer_filt = xQueueCreate( 64, sizeof( float ) );
+
+    if (buffer_adc != NULL & buffer_filt != NULL)
+    {
+        xTaskCreate(&vTask1, "Task 1", 1024, NULL, 2, NULL);
+        xTaskCreate(&vTask2, "Task 2", 1024, NULL, 3, NULL);
+        xTaskCreate(&vTask3, "Task 3", 1024, NULL, 1, NULL);
+        xTaskCreate(&vTask4, "Task 4", 1024, NULL, 1, NULL);
+    }
+    else
+    {
+        printf("[ERROR] The queues could not be created");
+    }
+    
+
+    vTaskStartScheduler();
 
     return 0;
 }
+
 /*-----------------------------------------------------------*/
 
 void vApplicationMallocFailedHook( void )
