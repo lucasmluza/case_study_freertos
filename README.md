@@ -1,6 +1,6 @@
 # case_study_freertos
 
-O projeto é baseado na versão demo POSIX_GCC do FreeRTOS.
+O projeto é baseado na versão demo POSIX_GCC do FreeRTOS. O projeto não está complete devido a restrição de tempo.
 
 ## Dependências
 
